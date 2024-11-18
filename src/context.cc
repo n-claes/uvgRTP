@@ -34,7 +34,7 @@ static inline std::string generate_string(size_t length)
 
 uvgrtp::context::context()
 {
-    UVG_LOG_INFO("uvgRTP version: %s", uvgrtp::get_version().c_str());
+    UVG_LOG_INFO("uvgRTP version: %s", "CUSTOM");
 
     cname_  = uvgrtp::context::generate_cname();
     sfp_ = std::make_shared<uvgrtp::socketfactory>(RCE_NO_FLAGS);
