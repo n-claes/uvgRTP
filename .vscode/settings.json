@@ -1,0 +1,16 @@
+{
+    "editor.formatOnSave": true,
+    "clangd.arguments": [
+        "-j=8",
+        "--log=error",
+        "--malloc-trim",
+        "--background-index",
+        "--clang-tidy",
+        "--completion-style=detailed",
+        "--pch-storage=memory",
+        "--header-insertion=never",
+        "--header-insertion-decorators=0",
+        "--completion-style=bundled",
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled"
+}

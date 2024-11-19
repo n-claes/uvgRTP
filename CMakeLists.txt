@@ -15,6 +15,8 @@ project(uvgrtp
 
 include(GNUInstallDirs)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 
 option(UVGRTP_DISABLE_CRYPTO "Do not build uvgRTP with crypto enabled" OFF)
 option(UVGRTP_DISABLE_PRINTS "Do not print anything from uvgRTP" OFF)
