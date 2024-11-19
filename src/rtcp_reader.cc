@@ -57,7 +57,7 @@ rtp_error_t uvgrtp::rtcp_reader::stop()
 
 void uvgrtp::rtcp_reader::rtcp_report_reader() {
 
-    UVG_LOG_INFO("RTCP report reader created!");
+    UVG_LOG_DEBUG("RTCP report reader created!");
     std::unique_ptr<uint8_t[]> buffer = std::unique_ptr<uint8_t[]>(new uint8_t[MAX_PACKET]);
 
     rtp_error_t ret = RTP_OK;
@@ -113,7 +113,7 @@ rtp_error_t uvgrtp::rtcp_reader::map_ssrc_to_rtcp(std::shared_ptr<std::atomic<ui
 }
 
 int uvgrtp::rtcp_reader::clear_rtcp_from_reader(std::shared_ptr<std::atomic<std::uint32_t>> remote_ssrc)
-{    
+{
     map_mutex_.lock();
     if (rtcps_map_.find(remote_ssrc) != rtcps_map_.end()) {
         rtcps_map_.erase(remote_ssrc);
