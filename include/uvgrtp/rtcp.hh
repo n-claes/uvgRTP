@@ -20,6 +20,7 @@
 #include <mutex>
 #include <deque>
 #include <atomic>
+#include <condition_variable>
 
 namespace uvgrtp {
 
@@ -136,9 +137,16 @@ namespace uvgrtp {
              * return RTP_OK on success */
             rtp_error_t stop();
 
+            void set_send_SR_reports(const bool sendReports);
+
             /* Generate either RTCP Sender or Receiver report and sent it to all participants
              * Return RTP_OK on success and RTP_ERROR on error */
             rtp_error_t generate_report();
+
+
+            /* Generate non-compound RTCP APP packets and send them directly to all participants
+             * Return RTP_OK on success and RTP_ERROR on error */
+            rtp_error_t generate_non_compound_app_packets();
 
             /* Handle incoming RTCP packet (first make sure it's a valid RTCP packet)
              * This function will call one of the above functions internally
@@ -662,6 +670,10 @@ namespace uvgrtp {
             std::mutex fb_mutex_;
             mutable std::mutex participants_mutex_;
 			std::mutex send_app_mutex_;
+
+            bool _shouldSendSRReports{ true };
+            bool _hasNonCompoundPacket{ false };
+            std::condition_variable _condition;
 
             std::unique_ptr<std::thread> report_generator_;
             std::shared_ptr<uvgrtp::socket> rtcp_socket_;

@@ -297,6 +297,10 @@ rtp_error_t uvgrtp::rtcp::stop()
     return ret;
 }
 
+void uvgrtp::rtcp::set_send_SR_reports(const bool sendReports) {
+    _shouldSendSRReports = sendReports;
+}
+
 void uvgrtp::rtcp::rtcp_runner(rtcp* rtcp)
 {
     UVG_LOG_DEBUG("RTCP instance created!");
@@ -309,36 +313,35 @@ void uvgrtp::rtcp::rtcp_runner(rtcp* rtcp)
     uint32_t current_interval_ms = rtcp->get_rtcp_interval_ms();
     rtp_error_t ret = RTP_OK;
 
-    // keep track of report numbers
-    int report_number = 0;
 
     while (rtcp->is_active())
     {
-        ++report_number;
-        UVG_LOG_DEBUG("Sending RTCP report number %i", report_number);
+        if (rtcp->_hasNonCompoundPacket) {
+            if (rtcp->generate_non_compound_app_packets() != RTP_OK) {
+                UVG_LOG_WARN("Failed to generate non-compound APP packets");
+            }
+        } else if (rtcp->_shouldSendSRReports) {
+            if ((ret = rtcp->generate_report()) != RTP_OK && ret != RTP_NOT_READY) {
+                UVG_LOG_WARN("Failed to send RTCP status report!");
+            }
 
-        if ((ret = rtcp->generate_report()) != RTP_OK && ret != RTP_NOT_READY)
-        {
-            UVG_LOG_INFO("Failed to send RTCP status report!");
-        }
-
-        //Here we check if there are any timed out sources
-        //This vector collects the ssrcs of timed out sources
-        std::vector<uint32_t> ssrcs_to_be_removed = {};
-        for (auto it = rtcp->ms_since_last_rep_.begin(); it != rtcp->ms_since_last_rep_.end(); ++it) {
-            double timeout_interval_s = rtcp->rtcp_interval(int(rtcp->members_), 1, rtcp->rtcp_bandwidth_,
-                true, (double)rtcp->avg_rtcp_size_, false, false);
-            it->second += uint32_t(current_interval_ms);
-            if (it->second > 5*1000*timeout_interval_s) {
-                ssrcs_to_be_removed.push_back(it->first);
+            //Here we check if there are any timed out sources
+            //This vector collects the ssrcs of timed out sources
+            std::vector<uint32_t> ssrcs_to_be_removed = {};
+            for (auto it = rtcp->ms_since_last_rep_.begin(); it != rtcp->ms_since_last_rep_.end(); ++it) {
+                double timeout_interval_s = rtcp->rtcp_interval(int(rtcp->members_), 1, rtcp->rtcp_bandwidth_,
+                    true, (double)rtcp->avg_rtcp_size_, false, false);
+                it->second += uint32_t(current_interval_ms);
+                if (it->second > 5*1000*timeout_interval_s) {
+                    ssrcs_to_be_removed.push_back(it->first);
+                }
+            }
+            //If some ssrcs are timed out, remove them
+            for (auto rm : ssrcs_to_be_removed) {
+                rtcp->remove_timeout_ssrc(rm);
+                rtcp->ms_since_last_rep_.erase(rm);
             }
         }
-        //If some ssrcs are timed out, remove them
-        for (auto rm : ssrcs_to_be_removed) {
-            rtcp->remove_timeout_ssrc(rm);
-            rtcp->ms_since_last_rep_.erase(rm);
-        }
-
         // Number of senders is hard set to 1, because it is not updated anywhere.
         // TODO: Keep track of senders and update it here too
         // Same goes for we_sent also, it is always set to true. TODO: fix this
@@ -346,7 +349,9 @@ void uvgrtp::rtcp::rtcp_runner(rtcp* rtcp)
             true, (double)rtcp->avg_rtcp_size_, true, true);
         current_interval_ms = (uint32_t)round(1000 * interval_s);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(current_interval_ms));
+        // let condition variable wait for the next interval or until it is notified
+        std::unique_lock<std::mutex> lock(rtcp->packet_mutex_);
+        rtcp->_condition.wait_for(lock, std::chrono::milliseconds(current_interval_ms));
     }
     UVG_LOG_DEBUG("Exited RTCP loop");
 }
@@ -1559,7 +1564,7 @@ rtp_error_t uvgrtp::rtcp::handle_app_packet(uint8_t* packet, size_t& read_ptr,
     /* Deallocate previous frame from the buffer if it exists, it's going to get overwritten */
     if (!is_participant(frame->ssrc))
     {
-        UVG_LOG_WARN("Got an APP packet from an unknown participant");
+        UVG_LOG_DEBUG("Got an APP packet from an unknown participant");
         add_participant(frame->ssrc);
     }
 
@@ -2015,6 +2020,62 @@ rtp_error_t uvgrtp::rtcp::generate_report()
     return send_rtcp_packet_to_participants(frame, compound_packet_size, true);
 }
 
+rtp_error_t uvgrtp::rtcp::generate_non_compound_app_packets() {
+    if (participants_.empty()) {
+        UVG_LOG_DEBUG("No other participants in this session. Non-compound packet not sent.");
+        return RTP_OK;
+    }
+    std::lock_guard<std::mutex> lock(packet_mutex_);
+    if (!_hasNonCompoundPacket) {
+        return RTP_OK;
+    }
+    uint32_t app_packets_size = 0;
+    for (auto& app_name : _non_compound_app_packets) {
+        if (!app_name.second.empty()) {
+            app_packets_size += get_app_packet_size(app_name.second.front().payload_len);
+        }
+    }
+    if (app_packets_size == 0) {
+        UVG_LOG_WARN("Failed to get non-compound packet size");
+        return RTP_GENERIC_ERROR;
+    } else if (app_packets_size > mtu_size_) {
+        UVG_LOG_WARN(
+            "Generate RTCP packet is too large %lli/%lli, packets should be circled, but not implemented!",
+            app_packets_size, mtu_size_
+        );
+    }
+
+    uint8_t* frame = new uint8_t[app_packets_size];
+    memset(frame, 0, app_packets_size);
+
+    size_t write_ptr = 0;
+    for (auto& app_name : _non_compound_app_packets) {
+        if (app_name.second.empty()) {
+            continue;
+        }
+        // take the oldest APP packet and send it
+        rtcp_app_packet& next_packet = app_name.second.front();
+        if (!construct_app_block(
+            frame,
+            write_ptr,
+            next_packet.subtype & 0x1f,
+            *ssrc_.get(),
+            next_packet.name,
+            std::move(next_packet.payload), next_packet.payload_len)
+        ) {
+            UVG_LOG_ERROR("Failed to construct APP packet");
+            delete[] frame;
+            app_name.second.pop_front();
+            return RTP_GENERIC_ERROR;
+        }
+        app_name.second.pop_front();
+    }
+    _hasNonCompoundPacket = false;
+
+    UVG_LOG_DEBUG("Sending RTCP non-compound APP packet, Total size: %lli", app_packets_size);
+    return send_rtcp_packet_to_participants(frame, app_packets_size, true);
+}
+
 rtp_error_t uvgrtp::rtcp::send_sdes_packet(const std::vector<uvgrtp::frame::rtcp_sdes_item>& items)
 {
     if (items.empty())
@@ -2063,10 +2124,14 @@ rtp_error_t uvgrtp::rtcp::send_app_packet(const char* name, uint8_t subtype,
             );
         }
         app_packets_[name].emplace_back(name, subtype, payload_len, std::move(pl));
+        // if we use the default behaviour, always enable reports or nothing gets sent
+        _shouldSendSRReports = true;
     } else {
         _non_compound_app_packets[name].emplace_back(name, subtype, payload_len, std::move(pl));
+        _hasNonCompoundPacket = true;
     }
     packet_mutex_.unlock();
+    _condition.notify_all();
 
     return RTP_OK;
 }
