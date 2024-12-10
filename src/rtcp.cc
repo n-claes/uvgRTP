@@ -2045,7 +2045,7 @@ rtp_error_t uvgrtp::rtcp::send_bye_packet(std::vector<uint32_t> ssrcs)
 }
 
 rtp_error_t uvgrtp::rtcp::send_app_packet(const char* name, uint8_t subtype,
-    uint32_t payload_len, const uint8_t *payload)
+    uint32_t payload_len, const uint8_t *payload, const bool use_compound)
 {
     packet_mutex_.lock();
 
@@ -2055,12 +2055,17 @@ rtp_error_t uvgrtp::rtcp::send_app_packet(const char* name, uint8_t subtype,
         pl[c] = payload[c];
     }
 
-    if (!app_packets_[name].empty())
-    {
-        UVG_LOG_DEBUG("Adding a new APP packet for sending when %llu packets are waiting to be sent",
-            app_packets_[name].size());
+    if (use_compound) {
+        if (!app_packets_[name].empty()) {
+            UVG_LOG_DEBUG(
+                "Adding a new APP packet for sending when %llu packets are waiting to be sent",
+                app_packets_[name].size()
+            );
+        }
+        app_packets_[name].emplace_back(name, subtype, payload_len, std::move(pl));
+    } else {
+        _non_compound_app_packets[name].emplace_back(name, subtype, payload_len, std::move(pl));
     }
-    app_packets_[name].emplace_back(name, subtype, payload_len, std::move(pl));
     packet_mutex_.unlock();
 
     return RTP_OK;

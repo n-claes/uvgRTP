@@ -103,19 +103,19 @@ namespace uvgrtp {
     /**
      * \brief RTCP instance handles all incoming and outgoing RTCP traffic, including report generation
      *
-     * \details If media_stream was created with RCE_RTCP flag, RTCP is enabled. RTCP periodically sends compound RTCP packets. 
+     * \details If media_stream was created with RCE_RTCP flag, RTCP is enabled. RTCP periodically sends compound RTCP packets.
      * The bit rate of RTP session influences the reporting interval, but changing this has not yet been implemented.
      *
-     * The compound RTCP packet begins with either Sender Reports if we sent RTP packets recently or Receiver Report if we didn't 
-     * send RTP packets recently. Both of these report types include report blocks for all the RTP sources we have received packets 
-     * from during reporting period. The compound packets also always have an SDES packet and calling send_sdes_packet()-function will 
+     * The compound RTCP packet begins with either Sender Reports if we sent RTP packets recently or Receiver Report if we didn't
+     * send RTP packets recently. Both of these report types include report blocks for all the RTP sources we have received packets
+     * from during reporting period. The compound packets also always have an SDES packet and calling send_sdes_packet()-function will
      * modify the contents of this SDES packet.
      *
-     * You can use the APP packet to test new RTCP packet types using the send_app_packet()-function. 
+     * You can use the APP packet to test new RTCP packet types using the send_app_packet()-function.
      * The APP packets are added to these periodically sent compound packets.
-     * 
-     * 
-     * See <a href="https://www.rfc-editor.org/rfc/rfc3550#section-6" target="_blank">RFC 3550 section 6</a> for more details. 
+     *
+     *
+     * See <a href="https://www.rfc-editor.org/rfc/rfc3550#section-6" target="_blank">RFC 3550 section 6</a> for more details.
      */
     class rtcp {
         public:
@@ -167,18 +167,23 @@ namespace uvgrtp {
             rtp_error_t send_sdes_packet(const std::vector<uvgrtp::frame::rtcp_sdes_item>& items);
 
             /**
-             * \brief Send an RTCP APP packet
+             * \brief Send an RTCP APP packet. Follows RFC 3550 by default, except if `use_compound` is set to false.
+             * In that case APP packets will not include SR/SS and will be sent DIRECTLY without a timeout.
+             * For applications that use RTCP-based APP packets for e.g. media plane control this is desired behaviour,
+             * since those packets should not follow compound packet rules.
              *
              * \param name Name of the APP item, e.g., STAT, must have a length of four ASCII characters
              * \param subtype Subtype of the APP item
              * \param payload_len Length of the payload
              * \param payload Payload
+             * \param use_compound If true, the APP packet will be included in the next compound packet. If false, the
+             * APP packet will be sent directly and without SR/RR.
              *
              * \retval RTP_OK On success
              * \retval RTP_MEMORY_ERROR If allocation fails
              * \retval RTP_GENERIC_ERROR If sending fails
              */
-            rtp_error_t send_app_packet(const char *name, uint8_t subtype, uint32_t payload_len, const uint8_t *payload);
+            rtp_error_t send_app_packet(const char *name, uint8_t subtype, uint32_t payload_len, const uint8_t *payload, const bool use_compound = true);
 
             /**
              * \brief Send an RTCP BYE packet
@@ -235,7 +240,7 @@ namespace uvgrtp {
              * Be aware that this interval is frequently re-calculated in rtcp_runner() */
             uint32_t get_rtcp_interval_ms() const;
 
-            /* Set total bandwidth for this session, called at the start 
+            /* Set total bandwidth for this session, called at the start
             *  This affects the RTCP packet transmission interval */
             void set_session_bandwidth(uint32_t kbps);
 
@@ -383,14 +388,14 @@ namespace uvgrtp {
              * \brief Install hook for one type of APP packets
              *
              * \details Each time the RR/SR is sent, all APP sending hooks call their respective functions to get the data
-             * 
+             *
              * \param app_name name of the APP packet. Max 4 chars
              * \param app_sending the function to be called when hook fires
              * \retval RTP_OK on success
              * \retval RTP_INVALID_VALUE If app_name is empty or longer that 4 characters or function pointer is empty
             */
             rtp_error_t install_send_app_hook(std::string app_name, std::function<std::unique_ptr<uint8_t[]>(uint8_t& subtype, uint32_t& payload_len)> app_sending_func);
-            
+
             /**
              * \brief Remove all installed hooks for RTCP
              *
@@ -438,7 +443,7 @@ namespace uvgrtp {
                 bool sr_packet, bool rr_packet, bool sdes_packet, uint32_t app_size, bool bye_packet) const;
 
             /* read the header values from rtcp packet */
-            void read_rtcp_header(const uint8_t* buffer, size_t& read_ptr, 
+            void read_rtcp_header(const uint8_t* buffer, size_t& read_ptr,
                 uvgrtp::frame::rtcp_header& header);
             void read_reports(const uint8_t* buffer, size_t& read_ptr, size_t packet_end, uint8_t count,
                 std::vector<uvgrtp::frame::rtcp_report_block>& reports);
@@ -561,13 +566,13 @@ namespace uvgrtp {
             /* "Minimum" value for RTCP transmission interval, depends on the session bandwidth
             *  Actual interval can be 50 % smaller due to randomisation */
             uint32_t reduced_minimum_;
-           
+
             /* Flag that is true if the application has sent data since
              * the 2nd previous RTCP report was transmitted. */
             // TODO: Only set, never read
             bool we_sent_;
 
-            /* Store sender and receiver info, this is needed when calling 
+            /* Store sender and receiver info, this is needed when calling
             *  add_participant dynamically (i.e. after initializing the stream) */
             std::string local_addr_;
             std::string remote_addr_;
@@ -679,8 +684,12 @@ namespace uvgrtp {
             // messages waiting to be sent
             std::vector<uvgrtp::frame::rtcp_sdes_item> ourItems_; // always sent
             std::vector<uint32_t> bye_ssrcs_; // sent once
-            
+
             std::map<std::string, std::deque<rtcp_app_packet>> app_packets_; // sent one at a time per name
+
+            // separate queue for non-compound APPs
+            std::map<std::string, std::deque<rtcp_app_packet>> _non_compound_app_packets;
+
             // APPs for hook
             std::multimap<std::string, std::function <std::unique_ptr<uint8_t[]>(uint8_t& subtype, uint32_t& payload_len)>> outgoing_app_hooks_;
             bool hooked_app_;
